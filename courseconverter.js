@@ -30,7 +30,7 @@ const parseXML = path =>{
         allowBooleanAttributes: true,
     }
 
-    const isValidXML = XMLValidator.validate(XMLData,options);
+    const isValidXML = XMLValidator.validate(XMLData);
 
     if (!isValidXML) {
         console.log(`file at location ${path} does not contain valid xml`);
@@ -53,6 +53,10 @@ const extractTar = (from,to) =>{
 
 const isDir = path => lstatSync(path).isDirectory();
 
+const createFileEntry = (path,flnm) => 
+    (flnm.endsWith('.xml')) ? 
+        {name:flnm,type:'file',contents:parseXML(path)} :
+        {name:flnm,type:'file'}
 
 // ~~~ !!! could be a problematic function  
 // creates a JSON containing the file structure of a given directory
@@ -62,7 +66,7 @@ const generateFileTree = path =>{
     const genNext = (p,f) => 
         (isDir(p)) ? 
             {name:f,type:'dir',children:generateFileTree(p)} :
-            {name:f,type:'file'};
+            createFileEntry(p,f);
     
     return files.map(file => genNext(`${path}/${file}`,file));
 }
@@ -76,7 +80,7 @@ const sanitizePath = path =>{
 }
 
 const processCourses = (pathIn,pathOut='tempdir') =>{
-    if(!isDir(pathIn)){
+    if(!isDir(pathIn)){ // recursive step
         const subDirName = sanitizePath(pathIn);      // filename
         const subPathOut = `${pathOut}/${subDirName}`;// for readability
         if (!existsSync(subPathOut)){
@@ -84,11 +88,10 @@ const processCourses = (pathIn,pathOut='tempdir') =>{
         }
 
         extractTar(pathIn,subPathOut);
-        return;
+    } else {
+        const pathInContents = readdirSync(pathIn);
+        pathInContents.forEach(item => processCourses(`${pathIn}/${item}`,pathOut));
     }
-
-    const pathInContents = readdirSync(pathIn);
-    pathInContents.forEach(item => processCourses(`${pathIn}/${item}`,pathOut));
 }
 
 
@@ -109,7 +112,7 @@ function main(){
     processCourses(inputCourses);
 
     const fileTree = generateFileTree('tempdir');
-    console.table(fileTree);
+    console.table(fileTree[0].children[0].children[2].children[1].contents);
 
 }
 

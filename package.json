@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "fast-xml-parser": "^5.2.5",
+    "fs": "^0.0.1-security",
+    "tar": "^7.4.3"
+  },
+  "type":"module"
+}
