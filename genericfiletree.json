@@ -1,0 +1,15 @@
+{"courses":[
+    {
+        "name":"course1",
+        "type":"dir",
+        "children":[
+            {
+                "name":"subdir1",
+                "type":"dir",
+                "children":[
+                    {"name":"file1.html","type"}
+                ]
+            }
+        ]
+    }
+]}

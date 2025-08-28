@@ -1,121 +1,132 @@
-// modules
-import { dir } from 'console';
-import { XMLParser, XMLValidator } from 'fast-xml-parser';
-import {existsSync, lstatSync, mkdirSync, readdirSync, readFileSync} from 'fs';
+import { XMLParser } from 'fast-xml-parser';
+import {mkdir,lstat,stat,readdir, readFile} from 'fs/promises';
 import * as tar from 'tar';
-
+import { NodeHtmlMarkdown, NodeHtmlMarkdownOptions } from 'node-html-markdown';
 
 // helpers
+const isDir = async (p) => (await lstat(p)).isDirectory();
+const getFileName = p => p.replace(/.*\/|\..*\S/g,'');
 
-/** delete me later
- * 1. open file and store as xml string
- * -> ensure can open file
- * 2. parse string via xml parser 
- * -> validate first
- */
-// parse XML:dd
 
-const dirExistsCheck = path => {
-    if (!existsSync(path)) {
-        console.log(`file/directory at location ${path} does not exist`);
-        process.exit(1); 
+const extractTar = async (from,to) => tar.x({f:from,cwd:to});
+
+const processCourses = async (pathIn,pathOut='tempdir') => {
+    if (await isDir(pathIn)){
+        const pathInContents =  await readdir(pathIn);
+        await Promise.all(pathInContents.map(f=>processCourses(`${pathIn}/${f}`,pathOut)));
+        return;
     }
-    return true;
+    const subDirName = getFileName(pathIn);
+    const subPathOut = `${pathOut}/${subDirName}`;
+    await mkdir(subPathOut,{recursive:true}); 
+    await extractTar(pathIn,subPathOut);        
 }
 
-const parseXML = path =>{
-    const XMLData = readFileSync(path,'utf-8');
-
+const parseXML = async (path) => {
+    const XMLData = await readFile(path);
     const options = {
-        allowBooleanAttributes: true,
+        allowBooleanAttributes:true,
+        ignoreAttributes:false
     }
 
-    const isValidXML = XMLValidator.validate(XMLData);
+    const parser = new XMLParser(options);
+    return await parser.parse(XMLData);
+}
 
-    if (!isValidXML) {
-        console.log(`file at location ${path} does not contain valid xml`);
-        process.exit(1);
+
+const generateFileTree = async (path) => {
+    const files = await readdir(path);
+
+    const genNext = async (p,f) => 
+        (await isDir(p)) ? 
+            {name:f,type:'dir',children:await generateFileTree(p)} :
+            {name:f,type:'file',
+                ...(f.endsWith('.xml')) && {contents:await parseXML(p)}}
+
+    return Promise.all(files.map(f=>genNext(`${path}/${f}`,f)));
+}
+
+// look at the structure:
+// course ->
+// chapter/s ->
+// sequential/s ->
+// vertical/s ->
+// content: ie. html, video, pictures, problems
+// instead of banging my head against the wall and considering alcoholism,
+// lets make a function for each!
+const HTMLtoMD = async (path) => {
+    const fileContents = await readFile(path,{encoding:'utf-8'});
+    return NodeHtmlMarkdown
+        .translate(fileContents)
+        .replace(/^\s*#+\s+(.*)$/gm, '**$1**'); // turns headers into bold
+}
+
+const createLiaScriptFile = async (fileTree,outPath) => {
+    const courseFile = fileTree.find(f=>f.type === 'file').contents;
+    const courseName = courseFile['course']['@_course'];
+    await mkdir(`${outPath}/${courseName}`,{recursive: true});
+
+    const genOLXObj = depth => fileTree
+        .filter(f=>f.name === depth)[0]
+        .children
+        .map(obj=>{
+            return {
+                uuid:obj.name,
+                details:obj.contents[depth]
+            }
+        })
+
+    const parseAtDepth = (nextDepth,mdPre,objArr) =>{
+        return objArr
+            .filter(o=>o.details[nextDepth] !== undefined)
+            .map(f=>{
+                const mdStr = f.details['@_display_name'];
+                return {
+                    uuid:getFileName(f.uuid),
+                    mdStr:`${mdPre} ${mdStr}`,
+                    [nextDepth]:f.details[nextDepth]
+                }
+            })
     }
+
+    const courseObj = genOLXObj('course');
+    const parsedCourse = parseAtDepth('chapter','#',courseObj);
     
-    const parser = new XMLParser();
-    return parser.parse(XMLData);
-}
+    const chapterArr = genOLXObj('chapter');
+    const parsedChapters = parseAtDepth('sequential','##',chapterArr);
+
+    const sequentialArr = genOLXObj('sequential');
+    const parsedSequentials = parseAtDepth('vertical','###',sequentialArr);
+
+    const verticalArr = genOLXObj('vertical');
+    const parsedHtmls = parseAtDepth('html','',verticalArr);
+    const parsedProblems = parseAtDepth('problem','',verticalArr);
+    const parsedVideos = parseAtDepth('video','',verticalArr);
+    console.log(parsedHtmls);
 
 
-// from: path containing archive
-// to:   path to extract contents to
-const extractTar = (from,to) =>{
-    tar.extract({
-        f:from,
-        cwd:to
-    });
-}
+    // next: create a function to deal with problems
+    // and videos (and other potential vertical content)
+    // stitch everything together
+    // write jest crap
 
-const isDir = path => lstatSync(path).isDirectory();
-
-const createFileEntry = (path,flnm) => 
-    (flnm.endsWith('.xml')) ? 
-        {name:flnm,type:'file',contents:parseXML(path)} :
-        {name:flnm,type:'file'}
-
-// ~~~ !!! could be a problematic function  
-// creates a JSON containing the file structure of a given directory
-const generateFileTree = path =>{
-    const files = readdirSync(path);
-
-    const genNext = (p,f) => 
-        (isDir(p)) ? 
-            {name:f,type:'dir',children:generateFileTree(p)} :
-            createFileEntry(p,f);
     
-    return files.map(file => genNext(`${path}/${file}`,file));
-}
-
-// spits out the name of the file without extension or parent directories
-const sanitizePath = path =>{
-    const firstCut = path.lastIndexOf('/');
-    const lastCut = path.indexOf('.');
-
-    return path.substring(firstCut+1,lastCut);
-}
-
-const processCourses = (pathIn,pathOut='tempdir') =>{
-    if(!isDir(pathIn)){ // recursive step
-        const subDirName = sanitizePath(pathIn);      // filename
-        const subPathOut = `${pathOut}/${subDirName}`;// for readability
-        if (!existsSync(subPathOut)){
-            mkdirSync(subPathOut);
-        }
-
-        extractTar(pathIn,subPathOut);
-    } else {
-        const pathInContents = readdirSync(pathIn);
-        pathInContents.forEach(item => processCourses(`${pathIn}/${item}`,pathOut));
-    }
 }
 
 
-
-function main(){
+async function main(){
     const args = process.argv.slice(2);
 
-    const inputCourses = args[0];   // in the form of an xml file
+    const inputCourses = args[0];   // in the form of an xml file/ dir
     const outputCourses = args[1];  // in the form of a directory
 
-    // check that both of these exist
-    dirExistsCheck(inputCourses);
-    dirExistsCheck(outputCourses);
+    // for now we assume the user has a brain
+    await mkdir('tempdir',{recursive:true});
     
-    if (!existsSync('tempdir')){
-        mkdirSync('tempdir');
-    }
-    processCourses(inputCourses);
-
-    const fileTree = generateFileTree('tempdir');
-    console.table(fileTree[0].children[0].children[2].children[1].contents);
+    await processCourses(inputCourses);
+    const fileTree = await generateFileTree('tempdir');
+    await createLiaScriptFile(fileTree[0].children[0].children,outputCourses);
 
 }
 
-// dirin => temp => dirout
-// dirin/exmp.tar.gz => temp/exmp/... => dirout/exmp/exmp.md
 main();
